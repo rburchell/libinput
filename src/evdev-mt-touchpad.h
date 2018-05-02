@@ -149,6 +149,7 @@ struct tp_touch {
 	enum touch_state state;
 	bool has_ended;				/* TRACKING_ID == -1 */
 	bool dirty;
+	bool active;
 	struct device_coords point;
 	struct device_coords last_point;
 	uint64_t time;

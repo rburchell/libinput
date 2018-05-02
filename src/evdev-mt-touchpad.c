@@ -308,6 +308,7 @@ tp_new_touch(struct tp_dispatch *tp, struct tp_touch *t, uint64_t time)
 	 * after ABS_MT_TRACKING_ID */
 	tp_motion_history_reset(t);
 	t->dirty = true;
+	t->active = false;
 	t->has_ended = false;
 	t->was_down = false;
 	t->palm.state = PALM_NONE;
@@ -324,6 +325,7 @@ static inline void
 tp_begin_touch(struct tp_dispatch *tp, struct tp_touch *t, uint64_t time)
 {
 	t->dirty = true;
+	t->active = false;
 	t->state = TOUCH_BEGIN;
 	t->time = time;
 	t->was_down = true;

@@ -36,6 +36,7 @@
 #define DEFAULT_TAP_TIMEOUT_PERIOD ms2us(180)
 #define DEFAULT_DRAG_TIMEOUT_PERIOD ms2us(300)
 #define DEFAULT_TAP_MOVE_THRESHOLD 1.3 /* mm */
+#define DEFAULT_TAP_NEARBY_THRESHOLD 30.0 /* mm */
 
 enum tap_event {
 	TAP_EVENT_TOUCH = 12,
@@ -158,6 +159,51 @@ static void
 tp_tap_clear_timer(struct tp_dispatch *tp)
 {
 	libinput_timer_cancel(&tp->tap.timer);
+}
+
+/* Find how many active points are in the vicinity of 't' inside 'tp', including
+ * 't' itself. */
+static int
+tp_tap_nearby_point_count(struct tp_dispatch *tp, struct tp_touch *t)
+{
+	struct tp_touch *tmp;
+	int n_nearby = 0;
+	struct tp_touch **nearby_points = calloc(tp->ntouches, sizeof(struct tp_touch*));
+
+	if (!nearby_points)
+		return 1;
+
+	/* 't' is close to itself */
+	nearby_points[n_nearby++] = t;
+
+	/* examine all the close points against all the dispatch's points. */
+	for (int i = 0; i < n_nearby; ++i) {
+		tp_for_each_touch(tp, tmp) {
+			if (!tmp->active) {
+				continue;
+			}
+
+			bool found = false;
+			for (int j = 0; j < n_nearby; ++j) {
+				if (nearby_points[j] == tmp) {
+					found = true;
+					break;
+				}
+			}
+
+			if (found) {
+				continue;
+			}
+
+			struct phys_coords mm = tp_phys_delta(tp, device_delta(tmp->point, nearby_points[i]->point));
+			if (length_in_mm(mm) <= DEFAULT_TAP_NEARBY_THRESHOLD) {
+				nearby_points[n_nearby++] = tmp;
+			}
+		}
+	}
+
+	free(nearby_points);
+	return n_nearby;
 }
 
 static void
@@ -402,14 +448,16 @@ tp_tap_touch2_release_handle_event(struct tp_dispatch *tp,
 		tp_tap_clear_timer(tp);
 		break;
 	case TAP_EVENT_RELEASE:
-		tp_tap_notify(tp,
-			      tp->tap.saved_press_time,
-			      2,
-			      LIBINPUT_BUTTON_STATE_PRESSED);
-		tp_tap_notify(tp,
-			      tp->tap.saved_release_time,
-			      2,
-			      LIBINPUT_BUTTON_STATE_RELEASED);
+		if (tp_tap_nearby_point_count(tp, t) >= 2) {
+			tp_tap_notify(tp,
+					  tp->tap.saved_press_time,
+					  2,
+					  LIBINPUT_BUTTON_STATE_PRESSED);
+			tp_tap_notify(tp,
+					  tp->tap.saved_release_time,
+					  2,
+					  LIBINPUT_BUTTON_STATE_RELEASED);
+		}
 		tp->tap.state = TAP_STATE_IDLE;
 		break;
 	case TAP_EVENT_MOTION:
@@ -467,7 +515,8 @@ tp_tap_touch3_handle_event(struct tp_dispatch *tp,
 		break;
 	case TAP_EVENT_RELEASE:
 		tp->tap.state = TAP_STATE_TOUCH_2_HOLD;
-		if (t->tap.state == TAP_TOUCH_STATE_TOUCH) {
+		if (t->tap.state == TAP_TOUCH_STATE_TOUCH &&
+			tp_tap_nearby_point_count(tp, t) >= 3) {
 			tp_tap_notify(tp,
 				      tp->tap.saved_press_time,
 				      3,
@@ -973,6 +1022,16 @@ tp_tap_handle_state(struct tp_dispatch *tp, uint64_t time)
 	if (tp->buttons.is_clickpad && tp->queued & TOUCHPAD_EVENT_BUTTON_PRESS)
 		tp_tap_handle_event(tp, NULL, TAP_EVENT_BUTTON, time);
 
+	/* Mark points as active if they are newly pressed. Releases will be handled
+	 * later, so click emulation can know what touches were active when state
+	 * change started. */
+	tp_for_each_touch(tp, t) {
+		if (t->active) {
+			continue;
+		}
+		t->active = t->state != TOUCH_NONE;
+	}
+
 	tp_for_each_touch(tp, t) {
 		if (!t->dirty || t->state == TOUCH_NONE)
 			continue;
@@ -1056,6 +1115,11 @@ tp_tap_handle_state(struct tp_dispatch *tp, uint64_t time)
 			   !t->tap.is_thumb) {
 			tp_tap_handle_event(tp, t, TAP_EVENT_THUMB, time);
 		}
+	}
+
+	/* Mark all touches active appropriately */
+	tp_for_each_touch(tp, t) {
+		t->active = t->state != TOUCH_NONE;
 	}
 
 	/**
