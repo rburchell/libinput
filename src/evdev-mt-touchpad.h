@@ -358,7 +358,11 @@ struct tp_dispatch {
 		struct libinput_device_config_tap config;
 		bool enabled;
 		bool suspended;
+		bool btn2_pending;
+		bool btn3_pending;
 		struct libinput_timer timer;
+		struct libinput_timer timer_2btn;
+		struct libinput_timer timer_3btn;
 		enum tp_tap_state state;
 		uint32_t buttons_pressed;
 		uint64_t saved_press_time,

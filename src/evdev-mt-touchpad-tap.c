@@ -37,6 +37,8 @@
 #define DEFAULT_DRAG_TIMEOUT_PERIOD ms2us(300)
 #define DEFAULT_TAP_MOVE_THRESHOLD 1.3 /* mm */
 #define DEFAULT_TAP_NEARBY_THRESHOLD 30.0 /* mm */
+#define DEFAULT_TAP_2BTN_DEBOUNCE_PERIOD ms2us(150)
+#define DEFAULT_TAP_3BTN_DEBOUNCE_PERIOD ms2us(300)
 
 enum tap_event {
 	TAP_EVENT_TOUCH = 12,
@@ -448,7 +450,9 @@ tp_tap_touch2_release_handle_event(struct tp_dispatch *tp,
 		tp_tap_clear_timer(tp);
 		break;
 	case TAP_EVENT_RELEASE:
-		if (tp_tap_nearby_point_count(tp, t) >= 2) {
+		if (!tp->tap.btn2_pending && tp_tap_nearby_point_count(tp, t) >= 2) {
+			tp->tap.btn2_pending = true;
+			libinput_timer_set(&tp->tap.timer_2btn, time + DEFAULT_TAP_2BTN_DEBOUNCE_PERIOD);
 			tp_tap_notify(tp,
 					  tp->tap.saved_press_time,
 					  2,
@@ -516,7 +520,10 @@ tp_tap_touch3_handle_event(struct tp_dispatch *tp,
 	case TAP_EVENT_RELEASE:
 		tp->tap.state = TAP_STATE_TOUCH_2_HOLD;
 		if (t->tap.state == TAP_TOUCH_STATE_TOUCH &&
+			tp->tap.btn3_pending == false &&
 			tp_tap_nearby_point_count(tp, t) >= 3) {
+			tp->tap.btn3_pending = true;
+			libinput_timer_set(&tp->tap.timer_3btn, time + DEFAULT_TAP_3BTN_DEBOUNCE_PERIOD);
 			tp_tap_notify(tp,
 				      tp->tap.saved_press_time,
 				      3,
@@ -1185,6 +1192,20 @@ tp_tap_handle_timeout(uint64_t time, void *data)
 }
 
 static void
+tp_tap_handle_timeout_2btn(uint64_t time, void *data)
+{
+	struct tp_dispatch *tp = data;
+	tp->tap.btn2_pending = false;
+}
+
+static void
+tp_tap_handle_timeout_3btn(uint64_t time, void *data)
+{
+	struct tp_dispatch *tp = data;
+	tp->tap.btn3_pending = false;
+}
+
+static void
 tp_tap_enabled_update(struct tp_dispatch *tp, bool suspended, bool enabled, uint64_t time)
 {
 	bool was_enabled = tp_tap_enabled(tp);
@@ -1398,6 +1419,8 @@ tp_init_tap(struct tp_dispatch *tp)
 
 	tp->tap.state = TAP_STATE_IDLE;
 	tp->tap.enabled = tp_tap_default(tp->device);
+	tp->tap.btn2_pending = false;
+	tp->tap.btn3_pending = false;
 	tp->tap.map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 	tp->tap.want_map = tp->tap.map;
 	tp->tap.drag_enabled = tp_drag_default(tp->device);
@@ -1411,12 +1434,30 @@ tp_init_tap(struct tp_dispatch *tp)
 			    tp_libinput_context(tp),
 			    timer_name,
 			    tp_tap_handle_timeout, tp);
+	snprintf(timer_name,
+		 sizeof(timer_name),
+		 "%s tap 2btn",
+		 evdev_device_get_sysname(tp->device));
+	libinput_timer_init(&tp->tap.timer_2btn,
+			    tp_libinput_context(tp),
+			    timer_name,
+			    tp_tap_handle_timeout_2btn, tp);
+	snprintf(timer_name,
+		 sizeof(timer_name),
+		 "%s tap 3btn",
+		 evdev_device_get_sysname(tp->device));
+	libinput_timer_init(&tp->tap.timer_3btn,
+			    tp_libinput_context(tp),
+			    timer_name,
+			    tp_tap_handle_timeout_3btn, tp);
 }
 
 void
 tp_remove_tap(struct tp_dispatch *tp)
 {
 	libinput_timer_cancel(&tp->tap.timer);
+	libinput_timer_cancel(&tp->tap.timer_2btn);
+	libinput_timer_cancel(&tp->tap.timer_3btn);
 }
 
 void
